@@ -12,6 +12,8 @@ export const myProvider = customProvider({
   languageModels: {
     'chat-model-small': openai('gpt-4o-mini'),
     'chat-model-large': openai('gpt-4o'),
+    'chat-model-reasoning-2': openai('o1'),
+    'chat-model-reasoning-3': openai('o3-mini'),
     'chat-model-reasoning': wrapLanguageModel({
       model: fireworks('accounts/fireworks/models/deepseek-r1'),
       middleware: extractReasoningMiddleware({ tagName: 'think' }),
@@ -33,17 +35,28 @@ interface ChatModel {
 export const chatModels: Array<ChatModel> = [
   {
     id: 'chat-model-small',
-    name: 'Small model',
+    name: 'GPT 4o mini',
     description: 'Small model for fast, lightweight tasks',
   },
   {
     id: 'chat-model-large',
-    name: 'Large model',
+    name: 'GPT 4o',
     description: 'Large model for complex, multi-step tasks',
   },
   {
     id: 'chat-model-reasoning',
-    name: 'Reasoning model',
+    name: 'DeepSeek R1',
+    description: 'Uses advanced reasoning (Best DeepSeek model)',
+  },
+  {
+    id: 'chat-model-reasoning-2',
+    name: 'o1',
     description: 'Uses advanced reasoning',
   },
+  {
+    id: 'chat-model-reasoning-3',
+    name: 'o3-mini',
+    description: 'Uses advanced reasoning (Best OpenAI model)',
+  },
+
 ];

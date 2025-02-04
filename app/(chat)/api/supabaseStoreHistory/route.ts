@@ -1,54 +1,78 @@
-// pages/api/notes.ts
-import type { NextApiRequest, NextApiResponse } from 'next';
+// app/api/chatHistory/route.ts
+import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-    // CREATE: Insert a new note (HTTP POST)
-    if (req.method === 'POST') {
-        const { title, content } = req.body;
-        const { data, error } = await supabase
-            .from('notes')
-            .insert([{ title, content }]);
+// Define an interface for the chat history record
+interface ChatHistory {
+    conv_id?: string;
+    title: string;
+    user_id: string;
+    conversation_history: any; // You can replace `any` with a more specific type if desired
+    created_at?: string;
+    updated_at?: string;
+}
 
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json(data);
+/**
+ * GET /api/chatHistory?user_id=...
+ * Retrieves chat history records for a given user.
+ */
+export async function GET(request: NextRequest) {
+    const { searchParams } = new URL(request.url);
+    const user_id = searchParams.get('user_id');
+
+    if (!user_id) {
+        return NextResponse.json(
+            { error: 'user_id query parameter is required' },
+            { status: 400 }
+        );
     }
 
-    // READ: Get all notes (HTTP GET)
-    else if (req.method === 'GET') {
-        const { data, error } = await supabase
-            .from('notes')
-            .select('*');
+    const { data, error } = await supabase
+        .from<ChatHistory>('chat_history')
+        .select('*')
+        .eq('user_id', user_id);
 
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json(data);
+    if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // UPDATE: Update a note (HTTP PUT)
-    else if (req.method === 'PUT') {
-        const { id, title, content } = req.body;
+    return NextResponse.json({ data });
+}
+
+/**
+ * POST /api/chatHistory
+ * Inserts a new chat history record.
+ *
+ * Expected JSON body:
+ * {
+ *   "title": "Conversation Title",
+ *   "user_id": "user-uuid",
+ *   "conversation_history": { ... }  // A valid JSON object representing the conversation history.
+ * }
+ */
+export async function POST(request: NextRequest) {
+    try {
+        const body = await request.json();
+        const { title, user_id, conversation_history } = body;
+
+        // Basic validation
+        if (!title || !user_id || !conversation_history) {
+            return NextResponse.json(
+                { error: 'Missing required fields: title, user_id, conversation_history' },
+                { status: 400 }
+            );
+        }
+
         const { data, error } = await supabase
-            .from('notes')
-            .update({ title, content })
-            .eq('id', id);
+            .from<ChatHistory>('chat_history')
+            .insert([{ title, user_id, conversation_history }]);
 
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json(data);
+        if (error) {
+            return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        return NextResponse.json({ data });
+    } catch (err: any) {
+        return NextResponse.json({ error: err.message }, { status: 500 });
     }
-
-    // DELETE: Delete a note (HTTP DELETE)
-    else if (req.method === 'DELETE') {
-        const { id } = req.body;
-        const { data, error } = await supabase
-            .from('notes')
-            .delete()
-            .eq('id', id);
-
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json(data);
-    }
-
-    // If the method is not supported, return a 405 error
-    res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
 }

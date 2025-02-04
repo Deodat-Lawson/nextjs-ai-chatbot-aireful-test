@@ -29,93 +29,146 @@ import { getWeather } from '@/lib/ai/tools/get-weather';
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
+  // Parse incoming request JSON
   const {
     id,
     messages,
     selectedChatModel,
   }: { id: string; messages: Array<Message>; selectedChatModel: string } =
-    await request.json();
+      await request.json();
 
+  // Authenticate user
   const session = await auth();
-
   if (!session || !session.user || !session.user.id) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  // Get the most recent user message
   const userMessage = getMostRecentUserMessage(messages);
-
   if (!userMessage) {
     return new Response('No user message found', { status: 400 });
   }
 
+  // Ensure the chat exists or create one if needed
   const chat = await getChatById({ id });
-
   if (!chat) {
     const title = await generateTitleFromUserMessage({ message: userMessage });
     await saveChat({ id, userId: session.user.id, title });
   }
 
+  // Save the incoming user message
   await saveMessages({
     messages: [{ ...userMessage, createdAt: new Date(), chatId: id }],
   });
 
+  // Determine if the selected model is a reasoning model.
+  // (This example treats any model ID that includes "reasoning" as a reasoning model.)
+  const isReasoningModel = selectedChatModel.includes('reasoning');
+
   return createDataStreamResponse({
     execute: (dataStream) => {
-      const result = streamText({
-        model: myProvider.languageModel(selectedChatModel),
-        system: systemPrompt({ selectedChatModel }),
-        messages,
-        maxSteps: 5,
-        experimental_activeTools:
-          selectedChatModel === 'chat-model-reasoning'
-            ? []
-            : [
-                'getWeather',
-                'createDocument',
-                'updateDocument',
-                'requestSuggestions',
-              ],
-        experimental_transform: smoothStream({ chunking: 'word' }),
-        experimental_generateMessageId: generateUUID,
-        tools: {
-          getWeather,
-          createDocument: createDocument({ session, dataStream }),
-          updateDocument: updateDocument({ session, dataStream }),
-          requestSuggestions: requestSuggestions({
-            session,
-            dataStream,
-          }),
-        },
-        onFinish: async ({ response, reasoning }) => {
-          if (session.user?.id) {
-            try {
-              const sanitizedResponseMessages = sanitizeResponseMessages({
-                messages: response.messages,
-                reasoning,
-              });
+      let result;
 
-              await saveMessages({
-                messages: sanitizedResponseMessages.map((message) => {
-                  return {
+      if (isReasoningModel) {
+        // === Reasoning Model Configuration ===
+        // Convert the messages array into a single prompt string.
+        // Customize this logic as needed for your prompt design.
+        const prompt = messages
+            .map((msg) => {
+              const roleLabel = msg.role === 'user' ? 'User:' : 'Assistant:';
+              return `${roleLabel} ${msg.content}`;
+            })
+            .join('\n');
+
+        result = streamText({
+          model: myProvider.languageModel(selectedChatModel),
+          prompt, // Use the single prompt string
+          maxSteps: 5,
+          // Disable active tools for reasoning models (unless you wish to enable them)
+          experimental_activeTools: [],
+          experimental_transform: smoothStream({ chunking: 'word' }),
+          experimental_generateMessageId: generateUUID,
+          tools: {}, // No tool integrations
+          onFinish: async ({ response, reasoning }) => {
+            if (session.user?.id) {
+              try {
+                const sanitizedResponseMessages = sanitizeResponseMessages({
+                  messages: response.messages,
+                  reasoning,
+                });
+                await saveMessages({
+                  messages: sanitizedResponseMessages.map((message) => ({
                     id: message.id,
                     chatId: id,
                     role: message.role,
                     content: message.content,
                     createdAt: new Date(),
-                  };
-                }),
-              });
-            } catch (error) {
-              console.error('Failed to save chat');
+                  })),
+                });
+              } catch (error) {
+                console.error('Failed to save chat');
+              }
             }
-          }
-        },
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: 'stream-text',
-        },
-      });
+          },
+          experimental_telemetry: {
+            isEnabled: true,
+            functionId: 'stream-text',
+          },
+        });
+      } else {
+        // === Chat Model Configuration ===
+        // For chat models, use the system prompt and structured messages.
+        result = streamText({
+          model: myProvider.languageModel(selectedChatModel),
+          system: systemPrompt({ selectedChatModel }),
+          messages,
+          maxSteps: 5,
+          experimental_activeTools:
+              selectedChatModel === 'chat-model-large'
+                  ? [
+                    'getWeather',
+                    'createDocument',
+                    'updateDocument',
+                    'requestSuggestions',
+                  ]
+                  : [], // For smaller chat models, you might disable tools for speed.
+          experimental_transform: smoothStream({ chunking: 'word' }),
+          experimental_generateMessageId: generateUUID,
+          tools: {
+            getWeather,
+            createDocument: createDocument({ session, dataStream }),
+            updateDocument: updateDocument({ session, dataStream }),
+            requestSuggestions: requestSuggestions({ session, dataStream }),
+          },
+          onFinish: async ({ response, reasoning }) => {
+            if (session.user?.id) {
+              try {
+                const sanitizedResponseMessages = sanitizeResponseMessages({
+                  messages: response.messages,
+                  reasoning,
+                });
+                await saveMessages({
+                  messages: sanitizedResponseMessages.map((message) => ({
+                    id: message.id,
+                    chatId: id,
+                    role: message.role,
+                    content: message.content,
+                    createdAt: new Date(),
+                  })),
+                });
+              } catch (error) {
+                console.error('Failed to save chat');
+              }
+            }
+          },
+          experimental_telemetry: {
+            isEnabled: true,
+            functionId: 'stream-text',
+          },
+        });
+      }
 
+      // Merge the result stream into the response stream.
       result.mergeIntoDataStream(dataStream, {
         sendReasoning: true,
       });
@@ -124,35 +177,4 @@ export async function POST(request: Request) {
       return 'Oops, an error occured!';
     },
   });
-}
-
-export async function DELETE(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get('id');
-
-  if (!id) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  const session = await auth();
-
-  if (!session || !session.user) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
-  try {
-    const chat = await getChatById({ id });
-
-    if (chat.userId !== session.user.id) {
-      return new Response('Unauthorized', { status: 401 });
-    }
-
-    await deleteChatById({ id });
-
-    return new Response('Chat deleted', { status: 200 });
-  } catch (error) {
-    return new Response('An error occurred while processing your request', {
-      status: 500,
-    });
-  }
 }
