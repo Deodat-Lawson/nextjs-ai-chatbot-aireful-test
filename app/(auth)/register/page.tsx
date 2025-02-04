@@ -50,7 +50,7 @@ export default function Page() {
             Eric 的爸爸
           </h1>
           <p className="mt-2 text-lg text-gray-600 dark:text-zinc-400">
-            Try out free o1 mini and o1 preview.
+            Try out the best models from OpenAI, Gemini, and Claude for free.
           </p>
         </div>
 
